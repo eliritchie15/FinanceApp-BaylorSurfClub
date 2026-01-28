@@ -5,22 +5,25 @@ import { useToast } from '@/components/Toast';
 
 export default function RecordTransactions() {
   const { addToast } = useToast();
-  // Get shared data from context
+  
+  // Get shared data and functions from context
   const {
     incomeTransactions,
-    setIncomeTransactions,
     expenditures,
-    setExpenditures,
     members,
-    setMembers,
     otherIncome,
-    setOtherIncome,
     totalIncome,
     totalExpenses,
     totalCapital,
-    seasonLength
+    seasonLength,
+    loading,
+    addMember,
+    updateMember,
+    deleteMember,
+    addIncome,
+    addExpenditure,
+    addOtherIncome
   } = useFinance();
-  
 
   // Form selection state
   const [selectedForm, setSelectedForm] = useState(null);
@@ -45,7 +48,7 @@ export default function RecordTransactions() {
   const [sessionsToReturn, setSessionsToReturn] = useState(1);
 
   // Handle income submission
-  function handleIncomeSubmit(e) {
+  async function handleIncomeSubmit(e) {
     e.preventDefault();
     
     // Determine amount based on payment type
@@ -59,116 +62,122 @@ export default function RecordTransactions() {
 
     // Handle "other" payments separately
     if (paymentType === 'other') {
-      const newOtherIncome = {
-        id: Date.now(),
-        name: fullName,
-        amount: amount,
-        date: new Date().toISOString().split('T')[0]
-      };
-      setOtherIncome([...otherIncome, newOtherIncome]);
-      
-      // Clear form
-      clearIncomeForm();
-      addToast('Other income added successfully!');
+      try {
+        await addOtherIncome({
+          name: fullName,
+          amount: amount,
+          date: new Date().toISOString().split('T')[0]
+        });
+        
+        clearIncomeForm();
+        addToast('Other income added!', 'success');
+      } catch (error) {
+        addToast('Failed to add other income', 'error');
+      }
       return;
     }
 
-    // Create income transaction
-    const newIncome = {
-      id: Date.now(),
-      firstName: firstName,
-      lastName: lastName,
-      paymentType: paymentType,
-      quantity: paymentType === 'extra-sessions' ? sessionQuantity : null,
-      amount: amount,
-      date: new Date().toISOString().split('T')[0],
-      memberId: null // Will be set when we create/update member
-    };
-
     // Check if member already exists
-    const existingMemberIndex = members.findIndex(
+    const existingMember = members.find(
       m => m.firstName.toLowerCase() === firstName.toLowerCase() && 
            m.lastName.toLowerCase() === lastName.toLowerCase()
     );
 
-    if (paymentType === 'full-season') {
-      // Full season creates new member (shouldn't have existing member)
-      if (existingMemberIndex !== -1) {
-        addToast('Member already exists! Full season members cannot purchase again.', 'error');
-        return;
+    try {
+      if (paymentType === 'full-season') {
+        // Full season creates new member
+        if (existingMember) {
+          addToast('Member already exists! Full season members cannot purchase again.', 'error');
+          return;
+        }
+
+        const newMember = await addMember({
+          firstName: firstName,
+          lastName: lastName,
+          sessions: seasonLength,
+          totalPaid: 425,
+          memberType: 'full-season'
+        });
+
+        await addIncome({
+          firstName: firstName,
+          lastName: lastName,
+          paymentType: paymentType,
+          quantity: null,
+          amount: amount,
+          date: new Date().toISOString().split('T')[0],
+          memberId: newMember.id
+        });
+        
+      } else if (paymentType === 'beach-pass') {
+        // Beach pass creates new member
+        if (existingMember) {
+          addToast('Member already exists!', 'error');
+          return;
+        }
+
+        const newMember = await addMember({
+          firstName: firstName,
+          lastName: lastName,
+          sessions: 0,
+          totalPaid: 35,
+          memberType: 'beach-pass'
+        });
+
+        await addIncome({
+          firstName: firstName,
+          lastName: lastName,
+          paymentType: paymentType,
+          quantity: null,
+          amount: amount,
+          date: new Date().toISOString().split('T')[0],
+          memberId: newMember.id
+        });
+        
+      } else if (paymentType === 'extra-sessions') {
+        // Extra sessions requires existing member
+        if (!existingMember) {
+          addToast('Member not found! Add them first.', 'error');
+          return;
+        }
+
+        // Check if they're full season (can't buy extra)
+        if (existingMember.memberType === 'full-season') {
+          addToast('Full season members already have max sessions!', 'error');
+          return;
+        }
+
+        // Calculate new session total (capped at season length)
+        const newSessionTotal = Math.min(existingMember.sessions + sessionQuantity, seasonLength);
+        const actualSessionsAdded = newSessionTotal - existingMember.sessions;
+
+        // Update member
+        await updateMember(existingMember.id, {
+          sessions: newSessionTotal,
+          totalPaid: existingMember.totalPaid + amount
+        });
+
+        await addIncome({
+          firstName: firstName,
+          lastName: lastName,
+          paymentType: paymentType,
+          quantity: sessionQuantity,
+          amount: amount,
+          date: new Date().toISOString().split('T')[0],
+          memberId: existingMember.id
+        });
+
+        if (actualSessionsAdded < sessionQuantity) {
+          addToast(`Only ${actualSessionsAdded} sessions added (capped)`, 'warning');
+        }
       }
 
-      const newMember = {
-        id: Date.now(),
-        firstName: firstName,
-        lastName: lastName,
-        sessions: seasonLength,
-        totalPaid: 425,
-        memberType: 'full-season'
-      };
-
-      newIncome.memberId = newMember.id;
-      setMembers([...members, newMember]);
-      setIncomeTransactions([...incomeTransactions, newIncome]);
-      
-    } else if (paymentType === 'beach-pass') {
-      // Beach pass creates new member
-      if (existingMemberIndex !== -1) {
-        addToast('Error: Member already exists!');
-        return;
-      }
-
-      const newMember = {
-        id: Date.now(),
-        firstName: firstName,
-        lastName: lastName,
-        sessions: 0,
-        totalPaid: 35,
-        memberType: 'beach-pass'
-      };
-
-      newIncome.memberId = newMember.id;
-      setMembers([...members, newMember]);
-      setIncomeTransactions([...incomeTransactions, newIncome]);
-      
-    } else if (paymentType === 'extra-sessions') {
-      // Extra sessions requires existing member
-      if (existingMemberIndex === -1) {
-        addToast('Error: Member not found! Please add them as Full Season or Beach Pass first.');
-        return;
-      }
-
-      const member = members[existingMemberIndex];
-
-      // Check if they're full season (can't buy extra)
-      if (member.memberType === 'full-season') {
-        addToast('Error: Full season members already have maximum sessions!');
-        return;
-      }
-
-      // Calculate new session total (capped at season length)
-      const newSessionTotal = Math.min(member.sessions + sessionQuantity, seasonLength);
-      const actualSessionsAdded = newSessionTotal - member.sessions;
-
-      // Update member
-      const updatedMembers = [...members];
-      updatedMembers[existingMemberIndex] = {
-        ...member,
-        sessions: newSessionTotal,
-        totalPaid: member.totalPaid + amount
-      };
-
-      newIncome.memberId = member.id;
-      setMembers(updatedMembers);
-      setIncomeTransactions([...incomeTransactions, newIncome]);
-
-      if (actualSessionsAdded < sessionQuantity) {
-        addToast(`Note: Only ${actualSessionsAdded} sessions added (capped at ${seasonLength}). Income recorded for ${sessionQuantity} sessions.`);
-      }
+      clearIncomeForm();
+      addToast('Income added successfully!', 'success');
+    } catch (error) {
+      addToast('Failed to add income', 'error');
+      console.error(error);
     }
-
-    clearIncomeForm();
-    addToast('Income added successfully!', 'success');
   }
 
   function clearIncomeForm() {
@@ -180,164 +189,149 @@ export default function RecordTransactions() {
   }
   
   // Handle expenditure submission
-  function handleExpenditureSubmit(e) {
+  async function handleExpenditureSubmit(e) {
     e.preventDefault();
     
-    const newExpenditure = {
-      id: Date.now(),
-      payee: expPayee,
-      reason: expReason,
-      amount: parseFloat(expAmount),
-      date: new Date().toISOString().split('T')[0]
-    };
-    
-    setExpenditures([...expenditures, newExpenditure]);
-    
-    // Check if payee is a member and update their totalPaid and sessions
-    const payeeNameLower = expPayee.toLowerCase().trim();
-    const memberIndex = members.findIndex(m => 
-      `${m.firstName} ${m.lastName}`.toLowerCase() === payeeNameLower
-    );
-    
-    if (memberIndex !== -1) {
-      const member = members[memberIndex];
-      const refundAmount = parseFloat(expAmount);
+    try {
+      await addExpenditure({
+        payee: expPayee,
+        reason: expReason,
+        amount: parseFloat(expAmount),
+        date: new Date().toISOString().split('T')[0]
+      });
       
-      // Calculate sessions to remove (each session = $80)
-      const sessionsReturned = Math.floor(refundAmount / 80);
-      const newSessionCount = Math.max(0, member.sessions - sessionsReturned);
-      const newTotalPaid = member.totalPaid - refundAmount;
-      
-      // Update member
-      const updatedMembers = [...members];
-      updatedMembers[memberIndex] = {
-        ...member,
-        sessions: newSessionCount,
-        totalPaid: newTotalPaid
-      };
-      setMembers(updatedMembers);
-      
-      addToast(
-        `Expenditure added!\n` +
-        `${expPayee}'s total paid: $${member.totalPaid.toFixed(2)} → $${newTotalPaid.toFixed(2)}\n` +
-        `Sessions: ${member.sessions} → ${newSessionCount} (${sessionsReturned} returned)`
+      // Check if payee is a member and update their totalPaid and sessions
+      const payeeNameLower = expPayee.toLowerCase().trim();
+      const member = members.find(m => 
+        `${m.firstName} ${m.lastName}`.toLowerCase() === payeeNameLower
       );
-    } else {
-      addToast('Expenditure added successfully!');
+      
+      if (member) {
+        const refundAmount = parseFloat(expAmount);
+        const sessionsReturned = Math.floor(refundAmount / 80);
+        const newSessionCount = Math.max(0, member.sessions - sessionsReturned);
+        const newTotalPaid = member.totalPaid - refundAmount;
+        
+        await updateMember(member.id, {
+          sessions: newSessionCount,
+          totalPaid: newTotalPaid
+        });
+        
+        addToast(`${expPayee}'s payment updated!`, 'success');
+      } else {
+        addToast('Expenditure added!', 'success');
+      }
+      
+      // Clear form
+      setExpPayee('');
+      setExpReason('');
+      setExpAmount('');
+    } catch (error) {
+      addToast('Failed to add expenditure', 'error');
+      console.error(error);
     }
-    
-    // Clear form
-    setExpPayee('');
-    setExpReason('');
-    setExpAmount('');
   }
 
   // Handle member removal (resignation)
-  function handleRemoveMember(e) {
+  async function handleRemoveMember(e) {
     e.preventDefault();
     
     if (!selectedMemberId) {
-      addToast('Please select a member');
+      addToast('Please select a member', 'error');
       return;
     }
     
-    // Find the member
-    const memberIndex = members.findIndex(m => m.id === parseInt(selectedMemberId));
-    if (memberIndex === -1) {
-      addToast('Member not found');
+    const member = members.find(m => m.id === parseInt(selectedMemberId));
+    if (!member) {
+      addToast('Member not found', 'error');
       return;
     }
     
-    const member = members[memberIndex];
     const fullName = `${member.firstName} ${member.lastName}`;
     
-    // Create expenditure for full refund
-    const refundExpenditure = {
-      id: Date.now(),
-      payee: fullName,
-      reason: 'Member Resignation - Full Refund',
-      amount: member.totalPaid,
-      date: new Date().toISOString().split('T')[0]
-    };
-    
-    setExpenditures([...expenditures, refundExpenditure]);
-    
-    // Remove member from members table
-    const updatedMembers = members.filter(m => m.id !== member.id);
-    setMembers(updatedMembers);
-    
-    // Clear form
-    setSelectedMemberId('');
-    
-    addToast(
-      `${fullName} removed from members.\n` +
-      `Refund of $${member.totalPaid.toFixed(2)} recorded in expenditures.`
-    );
+    try {
+      // Create expenditure for full refund
+      await addExpenditure({
+        payee: fullName,
+        reason: 'Member Resignation - Full Refund',
+        amount: member.totalPaid,
+        date: new Date().toISOString().split('T')[0]
+      });
+      
+      // Remove member from database
+      await deleteMember(member.id);
+      
+      // Clear form
+      setSelectedMemberId('');
+      
+      addToast(`${fullName} removed and refunded`, 'info');
+    } catch (error) {
+      addToast('Failed to remove member', 'error');
+      console.error(error);
+    }
   }
 
   // Handle return sessions
-  function handleReturnSessions(e) {
+  async function handleReturnSessions(e) {
     e.preventDefault();
     
     if (!returnMemberId) {
-      addToast('Please select a member');
+      addToast('Please select a member', 'error');
       return;
     }
     
-    // Find the member
-    const memberIndex = members.findIndex(m => m.id === parseInt(returnMemberId));
-    if (memberIndex === -1) {
-      addToast('Member not found');
+    const member = members.find(m => m.id === parseInt(returnMemberId));
+    if (!member) {
+      addToast('Member not found', 'error');
       return;
     }
     
-    const member = members[memberIndex];
     const sessionsReturning = parseInt(sessionsToReturn);
     
-    // Validation
     if (sessionsReturning < 1) {
-      addToast('Must return at least 1 session');
+      addToast('Must return at least 1 session', 'error');
       return;
     }
     
     if (sessionsReturning > member.sessions) {
-      addToast(`Error: ${member.firstName} ${member.lastName} only has ${member.sessions} sessions. Cannot return ${sessionsReturning}.`);
+      addToast(`Cannot return more than ${member.sessions} sessions`, 'error');
       return;
     }
     
-    // Calculate refund amount
     const refundAmount = sessionsReturning * 80;
     const fullName = `${member.firstName} ${member.lastName}`;
     
-    // Create expenditure for refund
-    const refundExpenditure = {
-      id: Date.now(),
-      payee: fullName,
-      reason: `Session Return - ${sessionsReturning} session(s)`,
-      amount: refundAmount,
-      date: new Date().toISOString().split('T')[0]
-    };
-    
-    setExpenditures([...expenditures, refundExpenditure]);
-    
-    // Update member
-    const updatedMembers = [...members];
-    updatedMembers[memberIndex] = {
-      ...member,
-      sessions: member.sessions - sessionsReturning,
-      totalPaid: member.totalPaid - refundAmount
-    };
-    setMembers(updatedMembers);
-    
-    // Clear form
-    setReturnMemberId('');
-    setSessionsToReturn(1);
-    
-    addToast(
-      `${sessionsReturning} session(s) returned for ${fullName}\n` +
-      `Refund: $${refundAmount.toFixed(2)}\n` +
-      `New session count: ${updatedMembers[memberIndex].sessions}\n` +
-      `New total paid: $${updatedMembers[memberIndex].totalPaid.toFixed(2)}`
+    try {
+      // Create expenditure for refund
+      await addExpenditure({
+        payee: fullName,
+        reason: `Session Return - ${sessionsReturning} session(s)`,
+        amount: refundAmount,
+        date: new Date().toISOString().split('T')[0]
+      });
+      
+      // Update member
+      await updateMember(member.id, {
+        sessions: member.sessions - sessionsReturning,
+        totalPaid: member.totalPaid - refundAmount
+      });
+      
+      // Clear form
+      setReturnMemberId('');
+      setSessionsToReturn(1);
+      
+      addToast(`${sessionsReturning} sessions returned for ${fullName}`, 'info');
+    } catch (error) {
+      addToast('Failed to return sessions', 'error');
+      console.error(error);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="p-8 flex items-center justify-center min-h-screen">
+        <div className="text-2xl text-gray-600">Loading...</div>
+      </div>
     );
   }
 
@@ -641,7 +635,7 @@ export default function RecordTransactions() {
                   min="1"
                   max={members.find(m => m.id === parseInt(returnMemberId))?.sessions || 1}
                   value={sessionsToReturn}
-                  onChange={(e) => setSessionsToReturn(parseInt(e.target.value))}
+                  onChange={(e) => setSessionsToReturn(parseInt(e.target.value) || 1)}
                   required
                   className="w-full border border-gray-300 p-2 rounded"
                 />
@@ -694,7 +688,7 @@ export default function RecordTransactions() {
             </thead>
             <tbody>
               {expenditures.map(exp => (
-                <tr key={exp.id} className="border-t">
+                <tr key={`exp-${exp.id}`} className="border-t">
                   <td className="p-3">{exp.date}</td>
                   <td className="p-3">{exp.payee}</td>
                   <td className="p-3">{exp.reason}</td>
@@ -721,7 +715,7 @@ export default function RecordTransactions() {
             </thead>
             <tbody>
               {members.map(member => (
-                <tr key={member.id} className="border-t">
+                <tr key={`member-${member.id}`} className="border-t">
                   <td className="p-3">{member.firstName} {member.lastName}</td>
                   <td className="p-3">{member.memberType}</td>
                   <td className="p-3 text-center">{member.sessions}</td>
@@ -749,7 +743,7 @@ export default function RecordTransactions() {
             </thead>
             <tbody>
               {incomeTransactions.map(income => (
-                <tr key={income.id} className="border-t">
+                <tr key={`income-${income.id}`} className="border-t">
                   <td className="p-3">{income.date}</td>
                   <td className="p-3">{income.firstName} {income.lastName}</td>
                   <td className="p-3">{income.paymentType}</td>
@@ -776,7 +770,7 @@ export default function RecordTransactions() {
             </thead>
             <tbody>
               {otherIncome.map(income => (
-                <tr key={income.id} className="border-t">
+                <tr key={`othinc-${income.id}`} className="border-t">
                   <td className="p-3">{income.date}</td>
                   <td className="p-3">{income.name}</td>
                   <td className="p-3 text-right">${income.amount.toFixed(2)}</td>

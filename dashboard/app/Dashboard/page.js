@@ -15,6 +15,7 @@ export default function Dashboard() {
     seasonLength
   } = useFinance();
 
+
   const totalMembers = members.length;
   
   // Calculate member types
@@ -77,26 +78,39 @@ export default function Dashboard() {
     { category: 'Expenses', amount: totalExpenses }
   ];
   
-  // Recent transactions - combine income and expenditures
+  // Test each part separately
+  const incomeTransformed = incomeTransactions.map(t => ({
+    id: `income-${t.id}`,
+    date: t.date,
+    name: `${t.firstName} ${t.lastName}`,
+    type: t.paymentType,
+    amount: t.amount
+  }));
+
+  const expendituresTransformed = expenditures.map(e => ({
+    id: `exp-${e.id}`,
+    date: e.date,
+    name: e.payee,
+    type: 'Expenditure',
+    amount: -e.amount
+  }));
+
+  const otherIncomeTransformed = otherIncome.map(o => ({
+    id: `othinc-${o.id}`,
+    date: o.date,
+    name: o.name,
+    type: 'Other Income',
+    amount: o.amount
+  }));
+
   const allTransactions = [
-    ...incomeTransactions.map(t => ({
-      id: t.id,
-      date: t.date,
-      name: `${t.firstName} ${t.lastName}`,
-      type: t.paymentType,
-      amount: t.amount
-    })),
-    ...expenditures.map(e => ({
-      id: e.id,
-      date: e.date,
-      name: e.payee,
-      type: 'Expenditure',
-      amount: -e.amount
-    }))
+    ...incomeTransformed,
+    ...expendituresTransformed,
+    ...otherIncomeTransformed
   ]
     .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 5);
-  
+    .slice(0, 10); // Changed to 10 to see more
+
   // Colors for charts
   const COLORS = ['#10b981', '#3b82f6', '#8b5cf6', '#f59e0b'];
   const MEMBER_COLORS = ['#10b981', '#3b82f6', '#8b5cf6'];
@@ -243,6 +257,7 @@ export default function Dashboard() {
             Total: {memberTypes.reduce((sum, m) => sum + m.count, 0)} members
           </div>
         </div>
+
 
         {/* Recent Transactions */}
         <div className="bg-white p-6 rounded-lg shadow">
